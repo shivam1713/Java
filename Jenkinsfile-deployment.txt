@@ -1,0 +1,480 @@
+#!groovy
+
+node {
+
+    def DELTACHANGES = 'deltachanges'
+	def DEPLOYDIR = 'toDeploy'
+	def APIVERSION = '52.0'
+    def toolbelt = tool 'toolbelt'
+	def SERVER_KEY_CREDENTIALS_ID = env.SERVER_KEY_CREDENTIALS_ID
+	def SF_INSTANCE_URL = env.("SF_INSTANCE_URL_" + "${params.Environment}")
+	def SF_CONSUMER_KEY = env.("SF_CONSUMER_KEY_" + "${params.Environment}")
+	def SF_USERNAME = env.("SF_USERNAME_" + "${params.Environment}")
+				
+
+	properties([gitLabConnection(gitLabConnection: '', jobCredentialId: ''), parameters([string(defaultValue: 'HEAD~1', name: 'PreviousCommitId'), string(defaultValue: 'HEAD', name: 'LatestCommitId'), [$class: 'ChoiceParameter', choiceType: 'PT_SINGLE_SELECT', filterLength: 1, filterable: false, name: 'Environment', randomName: 'choice-parameter-1436330150974400', script: [$class: 'GroovyScript', fallbackScript: [classpath: [], sandbox: false, script: ''], script: [classpath: [], sandbox: false, script: 'return[\'QA:selected\',\'UAT\',\'PROD\']']]], [$class: 'ChoiceParameter', choiceType: 'PT_SINGLE_SELECT', filterLength: 1, filterable: false, name: 'Deployment_Type', randomName: 'choice-parameter-1436330153999300', script: [$class: 'GroovyScript', fallbackScript: [classpath: [], sandbox: false, script: ''], script: [classpath: [], sandbox: false, script: 'return[\'Validate Only:selected\',\'Deploy Only\',\'Delete Only\',\'Delete and Deploy\']']]], [$class: 'CascadeChoiceParameter', choiceType: 'PT_SINGLE_SELECT', filterLength: 1, filterable: false, name: 'TESTLEVEL', randomName: 'choice-parameter-1436330156812900', referencedParameters: 'Deployment_Type', script: [$class: 'GroovyScript', fallbackScript: [classpath: [], sandbox: false, script: ''], script: [classpath: [], sandbox: false, script: '''if((Deployment_Type.equals("Validate Only")) || (Deployment_Type.equals("Deploy Only")) || (Deployment_Type.equals("Delete and Deploy"))){
+	return[\'NoTestRun\',\'RunLocalTests\',\'RunSpecifiedTests\']
+	}
+	else {
+	return[\'Test not applicable while deleting components\']
+	}
+	''']]], [$class: 'DynamicReferenceParameter', choiceType: 'ET_FORMATTED_HTML', name: 'SpecifyTestClass', omitValueField: true, randomName: 'choice-parameter-1436330159876900', referencedParameters: 'TESTLEVEL', script: [$class: 'GroovyScript', fallbackScript: [classpath: [], sandbox: false, script: ''], script: [classpath: [], sandbox: false, script: '''if(TESTLEVEL.equals("RunSpecifiedTests")){
+	inputBox="<textarea rows=\'9\' cols=\'70\' name=\'value\'></textarea>"
+	return inputBox
+	}''']]], gitParameter(branch: '', branchFilter: 'origin/(.*)', defaultValue: 'qa', name: 'Branch', quickFilterEnabled: true, selectedValue: 'NONE', sortMode: 'ASCENDING_SMART', tagFilter: '*', type: 'PT_BRANCH')])])
+
+
+	try 
+	{
+		if ((params.PreviousCommitId != '') && (params.LatestCommitId != ''))
+			println('')
+		else throw new Exception()
+			//error("Please enter both Previous and Latest commit IDs")
+	} catch (Exception e) {
+		currentBuild.result = "FAILED"
+		println('Please enter both Previous and Latest commit IDs')
+		emailext (attachLog: false, 
+		body: 'Error: Please enter both Previous and Latest commit IDs. \n\n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+		subject: '$DEFAULT_SUBJECT', 
+		to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+		throw e
+	}
+	
+
+	//----------------------------------------------------------------------
+	//Check if Previous and Latest commit IDs are same.
+	//----------------------------------------------------------------------
+	
+	try
+	{
+		if (params.PreviousCommitId != params.LatestCommitId)
+			println('')
+		else throw new Exception()	
+		//error("Previous and Latest Commit IDs can not be same.")
+	} catch (Exception e) {
+		currentBuild.result = "FAILED"
+		println('Previous and Latest commit id can not be same.')
+		emailext (attachLog: false, 
+		body: 'Error: Previous and Latest commit id can not be same. \n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+		subject: '$DEFAULT_SUBJECT', 
+		to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+		throw e
+	}
+
+	
+	//----------------------------------------------------------------------
+	//Check if Test classes are mentioned in case of RunSpecifiedTests.
+	//----------------------------------------------------------------------
+		
+	if (TESTLEVEL=='RunSpecifiedTests')
+	{
+		try
+		{
+			if (params.SpecifyTestClass != '')
+				println('')
+			else throw new Exception()	
+			//error("Please Specify Test classes.")
+		}catch (Exception e) {
+		currentBuild.result = "FAILED"
+		println('SpecifyTestClass cannot be empty while running specified tests.')
+		emailext (attachLog: false, 
+		body: 'Error: SpecifyTestClass can not be empty while running specified tests. \n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+		subject: '$DEFAULT_SUBJECT', 
+		to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+		throw e
+		}
+	}
+	
+
+    stage('Clean Workspace') {
+        try {
+            deleteDir()
+        }
+        catch (Exception e) {
+		currentBuild.result = "FAILED"
+		println('Unable to Clean WorkSpace.')
+		emailext (attachLog: false, 
+		body: 'Error: Unable to Clean WorkSpace. \n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+		subject: '$DEFAULT_SUBJECT', 
+		to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+		throw e       
+        }
+    }
+    // -------------------------------------------------------------------------
+    // Check out code from source control.
+    // -------------------------------------------------------------------------
+
+    stage('checkout source') {
+		try
+		{
+		   git branch: "${params.Branch}", credentialsId: 'Gitlab', url: 'https://git.nagarro.com/root/GITR00058.git'
+		} catch (Exception e) {
+		currentBuild.result = "FAILED"
+		println('Error in checking out the code from Git repository.')
+		emailext (attachLog: false, 
+		body: 'Error: Error in checking out the code from Git repository. \n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+		subject: '$DEFAULT_SUBJECT', 
+		to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+		throw e  
+		}
+	}
+
+    // -------------------------------------------------------------------------
+    // Run all the enclosed stages with access to the Salesforce
+    // JWT key credentials.
+    // -------------------------------------------------------------------------
+
+ 	withEnv(["HOME=${env.WORKSPACE}"]) {	
+	
+	    withCredentials([file(credentialsId: SERVER_KEY_CREDENTIALS_ID, variable: 'server_key_file')]) {
+		// -------------------------------------------------------------------------
+		// Authenticate to Salesforce using the server key.
+		// -------------------------------------------------------------------------
+
+		stage('Authorize to Salesforce') {
+			
+			rc = command "${toolbelt}/sfdx auth:jwt:grant --instanceurl ${SF_INSTANCE_URL} --clientid ${SF_CONSUMER_KEY} --jwtkeyfile ${server_key_file} --username ${SF_USERNAME} --setalias ${SF_USERNAME}"
+		    if (rc != 0) 
+			{
+				currentBuild.result = "FAILED"
+				
+				emailext (attachLog: false, 
+				body: 'Error: Salesforce org authorization failed. \n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+				subject: '$DEFAULT_SUBJECT', 
+				to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+				
+				error 'Salesforce org authorization failed.'
+		    }
+		}
+
+
+		stage('Delta changes')
+		{
+			script
+            {
+                //bat "echo y | sfdx plugins:install sfpowerkit"
+                rc = command "${toolbelt}/sfdx sfpowerkit:project:diff --revisionfrom %PreviousCommitId% --revisionto %LatestCommitId% --output ${DELTACHANGES} --apiversion ${APIVERSION} -x"
+                if (rc != 0) 
+				{
+					currentBuild.result = "FAILED"
+					emailext (attachLog: false, 
+					body: 'Error: Unable to generate Delta changes. \n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+					subject: '$DEFAULT_SUBJECT', 
+					to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+					error 'Unable to generate Delta changes.'
+				} 
+				def folder = fileExists "${DELTACHANGES}/force-app"
+				def file = fileExists "${DELTACHANGES}/destructiveChanges.xml"
+    
+				if( folder && !file )
+				{
+					dir("${WORKSPACE}/${DELTACHANGES}")
+					{
+						println "Force-app folder exist, destructiveChanges.xml doesn't exist"
+						rc = command "${toolbelt}/sfdx force:source:convert -d ../${DEPLOYDIR}"
+						if (rc != 0) 
+						{
+							currentBuild.result = "FAILED"
+							emailext (attachLog: false, 
+							body: 'Error: Failed to convert metadata in mdapi format. \n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+							subject: '$DEFAULT_SUBJECT', 
+							to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+							error 'Failed to convert metadata in mdapi format.'
+						}
+					}
+				} 
+				else if ( !folder && file ) 
+				{
+					bat "copy manifest\\package.xml ${DELTACHANGES}"
+					println "Force-app folder doesn't exist, destructiveChanges.xml exist" 
+				}
+				else if ( folder && file ) 
+				{
+					dir("${WORKSPACE}/${DELTACHANGES}")
+					{
+						println "Force-app folder exist, destructiveChanges.xml exist"
+						if (Deployment_Type=='Deploy Only')
+						{
+							println "You selected deploy only so deleting destructivechanges.xml to avoid component deletion."
+							bat "del /f destructiveChanges.xml"
+							rc = command "${toolbelt}/sfdx force:source:convert -d ../${DEPLOYDIR}"
+							if (rc != 0) 
+							{
+								currentBuild.result = "FAILED"
+								emailext (attachLog: false, 
+								body: 'Error: Failed to convert metadata in mdapi format. \n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+								subject: '$DEFAULT_SUBJECT', 
+								to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+								error 'Failed to convert metadata in mdapi format.'
+							}
+						}
+						else if (Deployment_Type=='Delete and Deploy')
+						{
+							println "Both deletion and deployment will be performed."
+							rc = command "${toolbelt}/sfdx force:source:convert -d ../${DEPLOYDIR}"
+							bat "copy destructiveChanges.xml ..\\${DEPLOYDIR}"
+							if (rc != 0) 
+							{
+								currentBuild.result = "FAILED"
+								emailext (attachLog: false, 
+								body: 'Error: Failed to convert metadata in mdapi format. \n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+								subject: '$DEFAULT_SUBJECT', 
+								to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+								error 'Failed to convert metadata in mdapi format.'
+							}
+
+						}
+						else if (Deployment_Type=='Delete Only')
+						{
+							println "You selected Delete only but force-app folder also exist. So deleting the force-app folder to avoid deployment."
+							bat "echo y | rmdir /s force-app"
+							bat "copy ..\\manifest\\package.xml ."
+						}
+						else if (Deployment_Type=='Validate Only')
+                        {
+                            println "You selected Validate Only, so only validation will be performed."
+                            rc = command "${toolbelt}/sfdx force:source:convert -d ../${DEPLOYDIR}"
+							
+							if (rc != 0) 
+							{
+								currentBuild.result = "FAILED"
+								emailext (attachLog: false, 
+								body: 'Error: Failed to convert metadata in mdapi format. \n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+								subject: '$DEFAULT_SUBJECT', 
+								to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+								error 'Failed to convert metadata in mdapi format.'
+							}
+                        }
+					}
+				}
+				else 
+				{
+					currentBuild.result = "FAILED"
+					emailext (attachLog: false, 
+					body: 'Error: There are no changes between the provided commit IDs that can be deployed or deleted. \n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+					subject: '$DEFAULT_SUBJECT', 
+					to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+					error "There are no changes between the provided commit IDs that can be deployed or deleted."
+				}
+               
+            }
+        }
+
+
+
+		stage('Validate Only') 
+		{
+			if (Deployment_Type=='Validate Only')
+			{
+				script
+				{
+				
+					if (TESTLEVEL=='NoTestRun') 
+					{
+						println TESTLEVEL
+						rc = command "${toolbelt}/sfdx force:mdapi:deploy -d ${DEPLOYDIR} --checkonly --wait 10 --targetusername ${SF_USERNAME} "
+					}
+					else if (TESTLEVEL=='RunLocalTests') 
+					{
+						println TESTLEVEL
+						rc = command "${toolbelt}/sfdx force:mdapi:deploy -d ${DEPLOYDIR} --checkonly --wait 10 --targetusername ${SF_USERNAME} --testlevel ${TESTLEVEL} --verbose --loglevel fatal"
+					}
+					else if (TESTLEVEL=='RunSpecifiedTests')
+					{
+						println TESTLEVEL
+						def Testclass = SpecifyTestClass.replaceAll('\\s','')
+						println Testclass
+						rc = command "${toolbelt}/sfdx force:mdapi:deploy -d ${DEPLOYDIR} --checkonly --wait 10 --targetusername ${SF_USERNAME} --testlevel ${TESTLEVEL} -r ${Testclass} --verbose --loglevel fatal"
+					}
+   
+					if (rc != 0) 
+					{
+						currentBuild.result = "FAILED"
+						dir("${WORKSPACE}/${DEPLOYDIR}")
+						{
+						emailext (attachLog: false, 
+						attachmentsPattern: 'package.xml, destructiveChanges.xml',
+						body: 'Error: Metadata Validation Failed. \n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+						subject: '$DEFAULT_SUBJECT', 
+						to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+						
+						error 'Metadata Validation Failed.'
+						}
+					} 
+				}
+			}
+   		}
+		
+
+        // -------------------------------------------------------------------------
+		// Deploy metadata and execute unit tests.
+		// -------------------------------------------------------------------------
+		
+
+		stage('Deploy and Run Tests') 
+		{
+			if (Deployment_Type=='Deploy Only')
+			{	
+				script
+				{
+					if (TESTLEVEL=='NoTestRun') 
+					{
+						println TESTLEVEL
+						rc = command "${toolbelt}/sfdx force:mdapi:deploy -d ${DEPLOYDIR} --wait 10 --targetusername ${SF_USERNAME} "
+					}
+					else if (TESTLEVEL=='RunLocalTests') 
+					{
+						println TESTLEVEL
+						rc = command "${toolbelt}/sfdx force:mdapi:deploy -d ${DEPLOYDIR} --wait 10 --targetusername ${SF_USERNAME} --testlevel ${TESTLEVEL} --verbose --loglevel fatal"
+					}
+					else if (TESTLEVEL=='RunSpecifiedTests') 
+					{
+						println TESTLEVEL
+						def Testclass = SpecifyTestClass.replaceAll('\\s','')
+						println Testclass						
+						rc = command "${toolbelt}/sfdx force:mdapi:deploy -d ${DEPLOYDIR} --wait 10 --targetusername ${SF_USERNAME} --testlevel ${TESTLEVEL} -r ${Testclass} --verbose --loglevel fatal"
+					}
+					
+					if (rc != 0) 
+					{
+						currentBuild.result = "FAILED"
+						dir("${WORKSPACE}/${DEPLOYDIR}")
+						{
+						emailext (attachLog: false, 
+						attachmentsPattern: 'package.xml, destructiveChanges.xml',
+						body: 'Error: Metadata Deployment Failed. \n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+						subject: '$DEFAULT_SUBJECT', 
+						to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+						
+						error 'Metadata Deployment Failed.'
+						}
+					} 
+
+				}
+			}
+		}
+
+		stage('Delete Components') 
+		{
+			if (Deployment_Type=='Delete Only')
+			{
+				rc = command "${toolbelt}/sfdx force:mdapi:deploy -u ${SF_USERNAME} -d ${DELTACHANGES} -w 1"	
+					if (rc != 0) 
+					{
+						currentBuild.result = "FAILED"
+						dir("${WORKSPACE}/${DELTACHANGES}")
+						{
+						emailext (attachLog: false, 
+						attachmentsPattern: 'destructiveChanges.xml',
+						body: 'Error: Component deletion Failed. \n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \n\nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+						subject: '$DEFAULT_SUBJECT', 
+						to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+						
+						error 'Component deletion Failed.'
+						}
+					}
+			}
+
+		}
+
+		stage('Delete and Deploy') 
+		{
+			if (Deployment_Type=='Delete and Deploy')
+			{
+				script
+				{
+					if (TESTLEVEL=='NoTestRun') 
+					{
+						println TESTLEVEL
+						rc = command "${toolbelt}/sfdx force:mdapi:deploy -d ${DEPLOYDIR} --wait 10 --targetusername ${SF_USERNAME} "
+					}
+					else if (TESTLEVEL=='RunLocalTests') 
+					{
+						println TESTLEVEL
+						rc = command "${toolbelt}/sfdx force:mdapi:deploy -d ${DEPLOYDIR} --wait 10 --targetusername ${SF_USERNAME} --testlevel ${TESTLEVEL} --verbose --loglevel fatal"
+					}
+					else if (TESTLEVEL=='RunSpecifiedTests') 
+					{
+						println TESTLEVEL
+						def Testclass = SpecifyTestClass.replaceAll('\\s','')
+						println Testclass						
+						rc = command "${toolbelt}/sfdx force:mdapi:deploy -d ${DEPLOYDIR} --wait 10 --targetusername ${SF_USERNAME} --testlevel ${TESTLEVEL} -r ${Testclass} --verbose --loglevel fatal"
+					}
+
+					if (rc != 0) 
+					{
+						currentBuild.result = "FAILED"
+						dir("${WORKSPACE}/${DEPLOYDIR}")
+						{
+						emailext (attachLog: false, 
+						attachmentsPattern: 'package.xml, destructiveChanges.xml',
+						body: 'Error: Metadata Deployment Failed. \n\nPrevious Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+						subject: '$DEFAULT_SUBJECT', 
+						to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+						
+						error 'Metadata Deployment Failed.'
+						}
+					} 
+ 
+				}
+				
+			}
+		}
+	
+		stage('EMail Notification')
+		{
+			bat 'chdir'
+			if (Deployment_Type=='Delete Only')
+			{
+				dir("${WORKSPACE}/${DELTACHANGES}")
+				{
+					emailext (attachLog: false, 
+					attachmentsPattern: 'destructiveChanges.xml',
+					body: 'Previous Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\n\n Component deleted successfully. \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+					subject: '$DEFAULT_SUBJECT', 
+					to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+						
+				}
+			}
+			else if(Deployment_Type=='Deploy Only')
+			{
+				dir("${WORKSPACE}/${DEPLOYDIR}")
+				{
+					emailext (attachLog: false, 
+					attachmentsPattern: 'package.xml',
+					body: 'Previous Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\n\n Metadata Deployment Successful. \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+					subject: '$DEFAULT_SUBJECT', 
+					to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+					
+				}
+			}
+			else
+			{
+				dir("${WORKSPACE}/${DEPLOYDIR}")
+				{
+					emailext (attachLog: false, 
+					attachmentsPattern: 'package.xml, destructiveChanges.xml',
+					body: 'Previous Commit ID : $PreviousCommitId \nLatest Commit ID : $LatestCommitId \nDeployment Type : $Deployment_Type \nTest Level :  $TESTLEVEL \nCreated by : $BUILD_USER \nEnvironment : $Environment \nBranch : $Branch \nBuild Status : $BUILD_STATUS! \n\n\n Metadata Validation/Deployment Successful. \n\nClick on below link after connecting to Nagarro VPN to view build results. \n\n$BUILD_URL/console', 
+					subject: '$DEFAULT_SUBJECT', 
+					to: '$BUILD_USER_EMAIL, $DEFAULT_RECIPIENTS')
+						
+				
+				}
+			}
+		}
+	
+	
+		}
+	}
+
+}
+
+
+	
+def command(script) {
+    if (isUnix()) {
+        return sh(returnStatus: true, script: script);
+    } else {
+		return bat(returnStatus: true, script: script);
+    }
+}
